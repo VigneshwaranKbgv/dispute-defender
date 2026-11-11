@@ -71,7 +71,7 @@ function CaseList({ cases, selectedId, now, onSelect, onAdd, adding, demoCaseId,
       <input class="input mono" placeholder="PP-R-XXX-00000000" aria-label="PayPal dispute ID" value=${value} onInput=${(e) => setValue(e.target.value)} />
       <button class="btn primary" type="submit" disabled=${adding || !value.trim()}>${adding ? html`<span class="spinner"></span>` : 'Add'}</button>
     </form>
-    <p class="faint small">Paste a dispute ID from PayPal. New disputes also arrive here by webhook.</p>
+    <p class="faint small">Paste a dispute ID from PayPal. Webhook delivery is enabled, but the sandbox may not send dispute events.</p>
 
     <div class="row between" style="margin-top:18px">
       <div class="section-label">Cases by urgency</div>

@@ -195,7 +195,7 @@ The repo includes [`render.yaml`](render.yaml) (one free web service, health che
 2. Enter the secret values when asked: `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `GEMINI_API_KEY`, and
    optionally `APP_PASSWORD` (shared password for the demo) and `PAYPAL_WEBHOOK_ID`.
 3. After the first deploy, register `https://<service>.onrender.com/webhooks/paypal` in the PayPal developer
-   dashboard (your sandbox app > Webhooks) for **Customer dispute created**, **updated** and **resolved**.
+   dashboard (your sandbox app > Webhooks) for **Customer dispute created** and **Customer dispute updated**.
    Copy the webhook ID into `PAYPAL_WEBHOOK_ID` and redeploy.
 
 Render's free tier has an ephemeral disk, so tracked cases reset on each deploy or restart. The app handles an
@@ -238,9 +238,13 @@ Everything below was observed against the PayPal sandbox on 11 Nov 2026 unless m
 - **Sandbox case state changes on its own for a few minutes after an action** (for example
   `WAITING_FOR_SELLER_RESPONSE` to `UNDER_REVIEW` to `WAITING_FOR_BUYER_RESPONSE`), and the allowed actions
   change with it. Press **Sync** to refresh.
-- **Webhooks have not been tested end to end yet.** They need a public URL. The receiver, signature
-  verification and upsert are covered by unit tests with mocked HTTP. Others have reported dispute webhooks
-  not firing in the sandbox. If they do not arrive, add cases by ID. _Update this line after the deploy test._
+- **Dispute webhooks did not arrive in our sandbox test.** The endpoint is deployed on Render and registered
+  with PayPal for `CUSTOMER.DISPUTE.CREATED` and `CUSTOMER.DISPUTE.UPDATED`. We then opened a fresh
+  item-not-received dispute as the sandbox buyer; PayPal's own webhook event log (`GET
+  /v1/notifications/webhooks-events`) stayed empty and nothing reached the app, so PayPal did not generate or
+  send the events. Others have reported the same in the sandbox. The receiver, signature verification and
+  upsert are covered by unit tests with mocked HTTP but were **not observed end to end**. Cases are therefore
+  added by ID (the app then pulls everything from the PayPal Disputes API).
 - **Deadlines can be estimates.** When PayPal omits `seller_response_due_date`, the date shown is the opening
   date plus 20 days for inquiries, labelled "Estimate". No date is invented for other stages.
 - **AI limits.** Only the Gemini adapter has been run live. The `gemini-flash-latest` alias did not answer
