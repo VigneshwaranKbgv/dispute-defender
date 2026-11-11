@@ -16,7 +16,7 @@ and serves a static single-page dashboard. There is no build step for the front 
 | `src/webhooks.ts` | Verifies the PayPal signature, then re-fetches the case by ID and upserts it. |
 | `src/store.ts` | JSON file repository (`data/db.json`): in-memory cache, serialized writes, write-to-temp then rename. |
 | `src/app.ts` | Express wiring: security headers, optional password gate, routes, error mapping, static files. |
-| `public/` | Preact + htm dashboard loaded as ES modules. Three columns: case list, case detail, AI panel. |
+| `public/` | Preact + htm dashboard loaded as ES modules. Two columns: case list on the left, case detail on the right as stacked cards (details, messages, evidence, case review, suggested response, history). One column on phones. |
 
 ## Main flows
 

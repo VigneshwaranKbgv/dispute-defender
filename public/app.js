@@ -1,31 +1,47 @@
 import { html, render, useState, useEffect, useRef, useCallback } from '/vendor/htm-preact.js';
-import { call, copyText, fmtAgo, fmtBytes, fmtDate, fmtMoney, fmtRemaining, humanize, Icon, readFileAsBase64, urgencyTone, waitingLabel } from '/lib.js';
+import { call, copyText, fmtAgo, fmtBytes, fmtDate, fmtMoney, fmtRemaining, humanize, Icon, readFileAsBase64, statusPill, urgencyTone, waitingLabel } from '/lib.js';
 
 const RECOMMENDED_TO_ACTION = { refund: 'accept-claim', contest: 'provide-evidence', ask_buyer: 'send-message', escalate: 'escalate' };
-const RECOMMENDED_LABEL = { refund: 'Refund the buyer', contest: 'Contest with evidence', ask_buyer: 'Message the buyer', escalate: 'Escalate to PayPal' };
-const ACTIVITY_TONE = { send_success: 'ok', send_failed: 'danger', analysis_failed: 'danger', sync_failed: 'danger', webhook_rejected: 'danger', analysis: 'accent', webhook: 'accent', case_added: 'accent' };
+const RECOMMENDED_LABEL = { refund: 'Refund the buyer', contest: 'Send your evidence to PayPal', ask_buyer: 'Message the buyer', escalate: 'Ask PayPal to step in' };
+const STRENGTH_LABEL = { weak: 'Weak', moderate: 'Moderate', strong: 'Strong' };
+const PRIORITY = { high: { label: 'Important', tone: 'danger' }, medium: { label: 'Helpful', tone: 'warn' }, low: { label: 'Optional', tone: '' } };
+const ACTIVITY_TONE = { send_success: 'ok', send_failed: 'danger', analysis_failed: 'danger', sync_failed: 'danger', webhook_rejected: 'danger', analysis: 'info', webhook: 'info', case_added: 'info' };
 
 const hashId = () => decodeURIComponent((location.hash.match(/^#\/case\/(.+)$/) || [])[1] || '');
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // ---------- small pieces ----------
 
-function Btn({ busy, icon, children, class: cls = '', ...rest }) {
+function Btn({ busy, children, class: cls = '', ...rest }) {
   return html`<button type="button" class=${`btn ${cls}`} disabled=${busy || rest.disabled} ...${rest}>
-    ${busy ? html`<span class="spinner"></span>` : icon ? icon() : null}${children}
+    ${busy ? html`<span class="spinner" aria-hidden="true"></span>` : null}${children}
   </button>`;
 }
 
-function DeadlineChip({ deadline, now }) {
-  if (deadline.urgency === 'closed') return html`<span class="chip">Resolved</span>`;
-  if (deadline.waitingOn) return html`<span class="chip"><${Icon.clock} />${waitingLabel[deadline.waitingOn]}</span>`;
-  if (!deadline.dueAt) return html`<span class="chip">No date from PayPal</span>`;
-  return html`<span class=${`chip ${urgencyTone[deadline.urgency]}`}><${Icon.clock} />${fmtRemaining(deadline.dueAt, now)}${deadline.isEstimate ? ' (est.)' : ''}</span>`;
+function LinkBtn({ busy, children, class: cls = '', ...rest }) {
+  return html`<button type="button" class=${`link-btn ${cls}`} disabled=${busy || rest.disabled} ...${rest}>
+    ${busy ? html`<span class="spinner" aria-hidden="true"></span>` : null}${children}
+  </button>`;
 }
 
-function StrengthChip({ strength }) {
-  if (!strength) return null;
-  const tone = { weak: 'danger', moderate: 'warn', strong: 'ok' }[strength.label] || '';
-  return html`<span class=${`chip ${tone}`}>${Math.round(strength.score)} · ${strength.label}</span>`;
+function StatusPill({ status }) {
+  const s = statusPill(status);
+  return html`<span class=${`pill ${s.tone}`}>${s.label}</span>`;
+}
+
+/** One line for the case list: what is due and when. */
+function dueText(deadline, now) {
+  if (deadline.urgency === 'closed') return 'No response due';
+  if (deadline.waitingOn) return 'Nothing due from you';
+  if (!deadline.dueAt) return 'No response date from PayPal';
+  return `Respond: ${fmtRemaining(deadline.dueAt, now)}${deadline.isEstimate ? ' (estimate)' : ''}`;
+}
+
+function Notice({ tone = '', icon = Icon.info, title, children, class: cls = '' }) {
+  return html`<div class=${`notice ${tone} ${cls}`}>
+    <${icon} />
+    <div class="grow">${title ? html`<div class="title">${title}</div>` : null}${children}</div>
+  </div>`;
 }
 
 function Modal({ title, onClose, wide, children, footer }) {
@@ -36,7 +52,7 @@ function Modal({ title, onClose, wide, children, footer }) {
   }, [onClose]);
   return html`<div class="overlay" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
     <div class=${`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label=${title}>
-      <header><h2>${title}</h2><${Btn} class="ghost sm" icon=${Icon.x} onClick=${onClose} aria-label="Close" /></header>
+      <header><h2>${title}</h2><button type="button" class="icon-btn" onClick=${onClose} aria-label="Close"><${Icon.x} /></button></header>
       <div class="body">${children}</div>
       ${footer ? html`<footer>${footer}</footer>` : null}
     </div>
@@ -44,75 +60,183 @@ function Modal({ title, onClose, wide, children, footer }) {
 }
 
 function ActivityList({ items, showCase }) {
-  if (!items.length) return html`<p class="muted small">Nothing yet.</p>`;
-  return html`<ul class="timeline">
+  if (!items.length) return html`<p class="muted">Nothing here yet.</p>`;
+  return html`<ol class="timeline">
     ${items.map(
       (a) => html`<li key=${a.id} class=${ACTIVITY_TONE[a.type] || ''}>
         <div class="pre">${a.summary}</div>
         <div class="when">${fmtDate(a.at)}${showCase && a.caseId ? html` · <span class="mono">${a.caseId}</span>` : null}</div>
       </li>`,
     )}
-  </ul>`;
+  </ol>`;
 }
 
-// ---------- left column ----------
+// ---------- left column: add a case + case list ----------
 
-function CaseList({ cases, selectedId, now, onSelect, onAdd, adding, demoCaseId, loaded }) {
+function Sidebar({ cases, selectedId, now, onSelect, onAdd, adding, config, loaded }) {
   const [value, setValue] = useState('');
   const submit = async (e) => {
     e.preventDefault();
     if (!value.trim()) return;
     if (await onAdd(value.trim())) setValue('');
   };
-  const hasDemo = cases.some((c) => c.id === demoCaseId);
+  const hasDemo = cases.some((c) => c.id === config.demoCaseId);
   return html`
-    <div class="section-label">Add a case</div>
-    <form class="add-form" onSubmit=${submit}>
-      <input class="input mono" placeholder="PP-R-XXX-00000000" aria-label="PayPal dispute ID" value=${value} onInput=${(e) => setValue(e.target.value)} />
-      <button class="btn primary" type="submit" disabled=${adding || !value.trim()}>${adding ? html`<span class="spinner"></span>` : 'Add'}</button>
-    </form>
-    <p class="faint small">Paste a dispute ID from PayPal. Webhook delivery is enabled, but the sandbox may not send dispute events.</p>
+    <section class="card">
+      <h2>Add a case</h2>
+      <form class="stack" onSubmit=${submit}>
+        <label class="field">Case ID
+          <input class="input mono" placeholder="PP-R-XXX-00000000" value=${value} onInput=${(e) => setValue(e.target.value)} autocomplete="off" spellcheck=${false} />
+        </label>
+        <button class="btn primary block" type="submit" disabled=${adding || !value.trim()}>${adding ? html`<span class="spinner" aria-hidden="true"></span>` : null}Add case</button>
+      </form>
+      <p class="muted small mt-8">
+        You'll find the case ID in your PayPal Resolution Center.
+        ${config.webhookConfigured ? ' New cases can also arrive from PayPal automatically, but the sandbox may not send dispute events.' : ''}
+      </p>
+    </section>
 
-    <div class="row between" style="margin-top:18px">
-      <div class="section-label">Cases by urgency</div>
-      ${cases.length ? html`<span class="faint small">${cases.length}</span>` : null}
-    </div>
-    ${!loaded
-      ? html`<div class="case-list"><div class="skeleton sk-block"></div><div class="skeleton sk-block"></div></div>`
-      : cases.length === 0
-        ? html`<div class="empty">
-            <${Icon.shieldOutline} />
-            <h3>No cases yet</h3>
-            <p>Add a dispute by its ID, or load the sandbox demo case to see how it works.</p>
-            <${Btn} class="primary" busy=${adding} onClick=${() => onAdd(demoCaseId, true)}>Add the demo case<//>
-          </div>`
-        : html`<div class="case-list">
-            ${cases.map(
-              (c) => html`<button key=${c.id} type="button" class=${`case-card ${c.id === selectedId ? 'active' : ''}`} onClick=${() => onSelect(c.id)}>
-                <div class="row between">
-                  <span class="title grow">${c.reasonLabel}</span>
-                  <span class="amount">${fmtMoney(c.amount)}</span>
-                </div>
-                <div class="meta"><span class="mono">${c.id}</span>${c.buyerName ? ` · ${c.buyerName}` : ''}</div>
-                <div class="chips">
-                  <${DeadlineChip} deadline=${c.deadline} now=${now} />
-                  <span class="chip outline">${humanize(c.stage)}</span>
-                  <${StrengthChip} strength=${c.strength} />
-                </div>
-              </button>`,
-            )}
-          </div>
-          ${!hasDemo ? html`<${Btn} class="ghost sm block" style="margin-top:10px" busy=${adding} onClick=${() => onAdd(demoCaseId, true)}>Add the demo case<//>` : null}`}
+    <section class="card flush">
+      <div class="card-head"><h2>Your cases${cases.length ? html`<span class="count">${cases.length}</span>` : null}</h2></div>
+      ${!loaded
+        ? html`<div class="empty"><div class="skeleton sk-line"></div><div class="skeleton sk-line"></div></div>`
+        : cases.length === 0
+          ? html`<div class="empty">
+              <p>You're not tracking any cases yet. Add one by its ID, or start with the sandbox demo case.</p>
+              <${Btn} class="sm" busy=${adding} onClick=${() => onAdd(config.demoCaseId, true)}>Add the demo case<//>
+            </div>`
+          : html`<div>
+              ${cases.map(
+                (c) => html`<button key=${c.id} type="button" class=${`case-row ${c.id === selectedId ? 'active' : ''}`} aria-current=${c.id === selectedId ? 'true' : undefined} onClick=${() => onSelect(c.id)}>
+                  <span class="avatar" aria-hidden="true">${(c.buyerName || '?').trim().charAt(0).toUpperCase()}</span>
+                  <span class="grow">
+                    <span class="row between top">
+                      <span class="title">${c.reasonLabel}</span>
+                      <span class="amount">${fmtMoney(c.amount)}</span>
+                    </span>
+                    <span class="meta">${c.buyerName || 'Unknown buyer'} · <span class="mono">${c.id}</span></span>
+                    <span class="tags">
+                      <${StatusPill} status=${c.status} />
+                      <span class="meta">${dueText(c.deadline, now)}</span>
+                    </span>
+                  </span>
+                </button>`,
+              )}
+              ${!hasDemo ? html`<div class="list-foot"><${LinkBtn} busy=${adding} onClick=${() => onAdd(config.demoCaseId, true)}>Add the demo case<//></div>` : null}
+            </div>`}
+    </section>
   `;
 }
 
-// ---------- center column ----------
+// ---------- case detail cards ----------
 
-function Fact({ k, children, mono }) {
-  return html`<div class="fact"><div class="k">${k}</div><div class=${`v ${mono ? 'mono' : ''}`}>${children}</div></div>`;
+function DeadlineBanner({ deadline: dl, now }) {
+  const tone = urgencyTone[dl.urgency];
+  let title;
+  if (dl.urgency === 'closed') title = 'This case is resolved';
+  else if (dl.waitingOn) title = waitingLabel[dl.waitingOn];
+  else if (!dl.dueAt) title = 'No response date available';
+  else if (dl.urgency === 'overdue') title = `Your response was due ${fmtDate(dl.dueAt)}`;
+  else title = `Respond by ${fmtDate(dl.dueAt)}`;
+  return html`<${Notice} tone=${tone} icon=${Icon.clock} class="deadline" title=${title}>
+    ${dl.dueAt && !dl.waitingOn ? html`<div><strong>${fmtRemaining(dl.dueAt, now)}</strong>${dl.isEstimate ? ' · estimated date' : ''}</div>` : null}
+    ${dl.dueAt && dl.waitingOn ? html`<div>Inquiry window ends ${fmtDate(dl.dueAt)} (estimate)</div>` : null}
+    <div class="muted small">${dl.basis}</div>
+  <//>`;
 }
 
-function EvidenceLocker({ detail, config, run, busy }) {
+function CaseHeader({ detail, now, run, busy, onRemove }) {
+  const d = detail.dispute;
+  return html`<section class="card">
+    <div class="row between top wrap">
+      <div class="grow">
+        <div class="muted small">Case <span class="mono">${d.id}</span></div>
+        <h1 class="case-title">${d.reasonLabel}</h1>
+      </div>
+      <div class="case-amount">${fmtMoney(d.amount)}</div>
+    </div>
+    <div class="row wrap mt-8">
+      <${StatusPill} status=${d.status} />
+      <span class="muted small">${humanize(d.stage)} stage${d.outcome ? ` · Outcome: ${humanize(d.outcome)}` : ''}</span>
+    </div>
+    <div class="row between wrap mt-16">
+      <a class="btn primary" href="#case-review" onClick=${(e) => { e.preventDefault(); document.getElementById('case-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Respond to dispute</a>
+      <div class="row wrap">
+        <span class="muted small">Updated ${fmtAgo(detail.syncedAt, now)}</span>
+        <${LinkBtn} busy=${busy.sync} onClick=${() => run('sync', () => call('POST', `/cases/${detail.id}/sync`), 'Case is up to date')}>Refresh from PayPal<//>
+        <${LinkBtn} class="quiet" onClick=${onRemove}>Stop tracking<//>
+      </div>
+    </div>
+  </section>`;
+}
+
+function Fact({ label, children, mono }) {
+  return html`<div class="fact"><dt>${label}</dt><dd class=${mono ? 'mono' : ''}>${children}</dd></div>`;
+}
+
+function CaseDetails({ detail }) {
+  const d = detail.dispute;
+  const txn = d.transactions[0];
+  const items = d.transactions.flatMap((t) => t.items);
+  return html`<section class="card">
+    <h2>Case details</h2>
+    <dl class="facts">
+      <${Fact} label="Buyer">${d.buyer.name || '—'}${d.buyer.email ? html`<div class="small muted">${d.buyer.email}</div>` : null}<//>
+      <${Fact} label="Seller">${d.seller.name || '—'}${d.seller.email ? html`<div class="small muted">${d.seller.email}</div>` : null}<//>
+      <${Fact} label=${items.length > 1 ? 'Items' : 'Item'}>${items.length ? items.map((i) => html`<div>${i.name || 'Unnamed item'}${i.quantity ? ` × ${i.quantity}` : ''}${i.type ? html` <span class="muted small">(${humanize(i.type)})</span>` : null}</div>`) : '—'}<//>
+      <${Fact} label="Transaction ID" mono>${txn?.sellerTransactionId || '—'}<//>
+      <${Fact} label="Buyer's transaction ID" mono>${txn?.buyerTransactionId || '—'}<//>
+      <${Fact} label="Payment date">${fmtDate(txn?.createdAt)}<//>
+      <${Fact} label="Case opened">${fmtDate(d.createdAt)}<//>
+      <${Fact} label="Buyer is asking for">${fmtMoney(d.buyerRequestedAmount)}<//>
+      <${Fact} label="Maximum refund">${fmtMoney(d.allowedRefundAmount)}<//>
+      <${Fact} label="Seller Protection">${!txn || txn.sellerProtectionEligible === null ? '—' : txn.sellerProtectionEligible ? 'Eligible' : 'Not eligible'}<//>
+      <${Fact} label="PayPal status">${humanize(d.status)} · ${humanize(d.state)}<//>
+      <${Fact} label="What you can do now">${d.allowedActions.length ? html`<div class="tag-list">${d.allowedActions.map((a) => html`<span class="pill">${detail.actionLabels[a]}</span>`)}</div>` : 'No actions are open right now'}<//>
+    </dl>
+  </section>`;
+}
+
+/** Messages and PayPal's evidence trail merged into one timeline, oldest first. */
+function Messages({ dispute: d }) {
+  const buyer = d.buyer.name || 'The buyer';
+  const entries = [
+    ...d.messages.map((m) => ({
+      at: m.at,
+      tone: m.postedBy === 'SELLER' ? 'info' : '',
+      who: m.postedBy === 'SELLER' ? 'You wrote' : m.postedBy === 'BUYER' ? `${buyer} wrote` : `${humanize(m.postedBy)} wrote`,
+      body: m.content,
+    })),
+    ...d.evidences.map((e) => ({
+      at: e.at,
+      tone: e.source === 'REQUESTED_FROM_SELLER' ? 'warn' : e.source === 'SUBMITTED_BY_SELLER' ? 'ok' : '',
+      who:
+        e.type === 'CREATE'
+          ? `${buyer} opened the case`
+          : e.source === 'REQUESTED_FROM_SELLER'
+            ? `PayPal asked you for: ${humanize(e.type).toLowerCase()}`
+            : e.source === 'SUBMITTED_BY_SELLER'
+              ? `You sent PayPal: ${humanize(e.type).toLowerCase()}`
+              : e.source === 'SUBMITTED_BY_BUYER'
+                ? `${buyer} sent PayPal: ${humanize(e.type).toLowerCase()}`
+                : `${humanize(e.source)}: ${humanize(e.type).toLowerCase()}`,
+      body: e.type === 'CREATE' ? null : e.notes,
+    })),
+  ].sort((a, b) => (a.at || '9').localeCompare(b.at || '9'));
+  return html`<section class="card">
+    <h2>Messages</h2>
+    ${entries.length === 0
+      ? html`<p class="muted">There are no messages on this case yet.</p>`
+      : html`<ol class="timeline">
+          ${entries.map((e) => html`<li class=${e.tone}>
+            <div><span class="who">${e.who}</span> <span class="when">· ${fmtDate(e.at)}</span></div>
+            ${e.body ? html`<div class="said pre">${e.body}</div>` : null}
+          </li>`)}
+        </ol>`}
+  </section>`;
+}
+
+function Evidence({ detail, config, run, busy }) {
   const [type, setType] = useState('delivery_proof');
   const [note, setNote] = useState('');
   const [file, setFile] = useState(null);
@@ -122,7 +246,7 @@ function EvidenceLocker({ detail, config, run, busy }) {
   const add = async (e) => {
     e.preventDefault();
     const ok = await run('evidence', async () => {
-      if (file && file.size > limits.maxFileBytes) throw new Error(`File is too large (max ${fmtBytes(limits.maxFileBytes)}).`);
+      if (file && file.size > limits.maxFileBytes) throw new Error(`That file is too large. The limit is ${fmtBytes(limits.maxFileBytes)}.`);
       const payload = { type, note };
       if (file) payload.file = { name: file.name, mimeType: file.type || (/\.(md|csv|txt)$/i.test(file.name) ? 'text/plain' : ''), base64: await readFileAsBase64(file) };
       return call('POST', `/cases/${detail.id}/evidence`, payload);
@@ -135,196 +259,100 @@ function EvidenceLocker({ detail, config, run, busy }) {
   };
 
   return html`<section class="card">
-    <h3>Evidence locker <span class="count">${detail.evidence.length}</span></h3>
+    <h2>Your evidence${detail.evidence.length ? html`<span class="count">${detail.evidence.length}</span>` : null}</h2>
     ${detail.evidence.length === 0
-      ? html`<p class="muted small">Nothing here yet. Add delivery proof, tracking, chat transcripts or invoices. The AI reads text files and images; everything stays on this server until you approve a response.</p>`
-      : detail.evidence.map(
-          (ev) => html`<div class="ev-item" key=${ev.id}>
-            <span class="chip accent">${config.evidenceTypes[ev.type] || ev.type}</span>
-            <div class="grow">
-              ${ev.file
-                ? html`<a href=${`/api/cases/${detail.id}/evidence/${ev.id}/file`} target="_blank" rel="noopener">${ev.file.name}</a>
-                    <span class="faint small"> · ${fmtBytes(ev.file.size)}</span>`
-                : null}
-              ${ev.note ? html`<div class="pre small">${ev.note}</div>` : null}
-              <div class="faint small">Added ${fmtDate(ev.addedAt)}</div>
-            </div>
-            <${Btn} class="ghost sm" icon=${Icon.x} aria-label="Remove evidence" title="Remove" disabled=${busy.evidence}
-              onClick=${() => run('evidence', () => call('DELETE', `/cases/${detail.id}/evidence/${ev.id}`), 'Evidence removed')} />
-          </div>`,
-        )}
+      ? html`<p class="muted">Nothing added yet. Upload proof of delivery, tracking, messages with the buyer, or an invoice. Files stay here until you choose to send a response.</p>`
+      : html`<div>
+          ${detail.evidence.map(
+            (ev) => html`<div class="ev-item" key=${ev.id}>
+              <span class="ev-icon" aria-hidden="true">${ev.file ? html`<${Icon.file} />` : html`<${Icon.note} />`}</span>
+              <div class="grow">
+                <div>
+                  ${ev.file
+                    ? html`<a class="ev-name" href=${`/api/cases/${detail.id}/evidence/${ev.id}/file`} target="_blank" rel="noopener">${ev.file.name}</a>`
+                    : html`<span class="ev-name">Note</span>`}
+                </div>
+                ${ev.note ? html`<div class="pre">${ev.note}</div>` : null}
+                <div class="muted small">${config.evidenceTypes[ev.type] || ev.type}${ev.file ? ` · ${fmtBytes(ev.file.size)}` : ''} · Added ${fmtDate(ev.addedAt)}</div>
+              </div>
+              <button type="button" class="icon-btn" aria-label=${`Remove ${ev.file ? ev.file.name : 'note'}`} title="Remove" disabled=${busy.evidence}
+                onClick=${() => run('evidence', () => call('DELETE', `/cases/${detail.id}/evidence/${ev.id}`), 'Evidence removed')}><${Icon.x} /></button>
+            </div>`,
+          )}
+        </div>`}
 
-    <form class="ev-form" onSubmit=${add}>
-      <label class="field">Type
-        <select class="input" value=${type} onChange=${(e) => setType(e.target.value)}>
-          ${Object.entries(config.evidenceTypes).map(([k, label]) => html`<option value=${k}>${label}</option>`)}
-        </select>
-      </label>
-      <label class="field">File (optional, max ${fmtBytes(limits.maxFileBytes)})
-        <input ref=${fileRef} type="file" accept=".txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif,.pdf" onChange=${(e) => setFile(e.target.files[0] || null)} />
-      </label>
-      <label class="field full">Note
-        <textarea class="input" rows="2" maxlength=${limits.maxNoteChars} placeholder="What does this prove? e.g. Courier scan shows delivery on 12 Nov." value=${note} onInput=${(e) => setNote(e.target.value)}></textarea>
-      </label>
-      <div class="full row between wrap">
-        <span class="faint small">TXT, MD, CSV, PNG, JPG, WEBP, GIF or PDF.</span>
-        <div class="row">
+    <form class="section" onSubmit=${add}>
+      <h3>Add evidence</h3>
+      <div class="form-grid">
+        <label class="field">Type
+          <select class="input" value=${type} onChange=${(e) => setType(e.target.value)}>
+            ${Object.entries(config.evidenceTypes).map(([k, label]) => html`<option value=${k}>${label}</option>`)}
+          </select>
+        </label>
+        <label class="field">File <span class="hint">Optional. TXT, CSV, PNG, JPG, GIF, WEBP or PDF, up to ${fmtBytes(limits.maxFileBytes)}.</span>
+          <input ref=${fileRef} type="file" accept=".txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif,.pdf" onChange=${(e) => setFile(e.target.files[0] || null)} />
+        </label>
+        <label class="field full">Description
+          <textarea class="input" rows="2" maxlength=${limits.maxNoteChars} placeholder="What does this show? For example: courier scan showing delivery on 12 November." value=${note} onInput=${(e) => setNote(e.target.value)}></textarea>
+        </label>
+        <div class="full actions">
+          <button class="btn sm" type="submit" disabled=${busy.evidence || (!note.trim() && !file)}>${busy.evidence ? html`<span class="spinner" aria-hidden="true"></span>` : null}Add evidence</button>
           ${detail.id === config.demoCaseId
-            ? html`<${Btn} class="sm" busy=${busy.evidence} onClick=${() => run('evidence', () => call('POST', `/cases/${detail.id}/evidence/samples`), 'Sample evidence added')}>Add sample evidence<//>`
+            ? html`<${LinkBtn} busy=${busy.evidence} onClick=${() => run('evidence', () => call('POST', `/cases/${detail.id}/evidence/samples`), 'Sample evidence added')}>Use sample evidence<//>`
             : null}
-          <button class="btn primary sm" type="submit" disabled=${busy.evidence || (!note.trim() && !file)}>${busy.evidence ? html`<span class="spinner"></span>` : html`<${Icon.plus} />`}Add evidence</button>
         </div>
       </div>
     </form>
   </section>`;
 }
 
-function CaseDetail({ detail, config, now, run, busy, onRemove }) {
-  const d = detail.dispute;
-  const dl = detail.deadline;
-  const txn = d.transactions[0];
-  const items = d.transactions.flatMap((t) => t.items);
-  return html`<div class="detail">
-    <section class="card case-head">
-      <div class="row between wrap">
-        <div class="grow">
-          <div class="faint small mono">${d.id}</div>
-          <h1>${d.reasonLabel}</h1>
-        </div>
-        <div class="amount">${fmtMoney(d.amount)}</div>
-      </div>
-      <div class="row between wrap" style="margin-top:2px">
-        <div class="chips">
-          <span class=${`chip ${d.status === 'RESOLVED' ? '' : d.status === 'WAITING_FOR_SELLER_RESPONSE' ? 'warn' : 'accent'}`}>${humanize(d.status)}</span>
-          <span class="chip outline">Stage: ${humanize(d.stage)}</span>
-          <span class="chip outline">State: ${humanize(d.state)}</span>
-          ${d.outcome ? html`<span class="chip">Outcome: ${humanize(d.outcome)}</span>` : null}
-        </div>
-        <div class="row" style="margin-top:10px">
-          <span class="faint small">Synced ${fmtAgo(detail.syncedAt, now)}</span>
-          <${Btn} class="sm" icon=${Icon.sync} busy=${busy.sync} onClick=${() => run('sync', () => call('POST', `/cases/${detail.id}/sync`), 'Synced with PayPal')}>Sync<//>
-          <${Btn} class="ghost sm" onClick=${onRemove} title="Remove this case from Dispute Defender only">Stop tracking<//>
-        </div>
-      </div>
-
-      <div class=${`deadline ${dl.urgency}`}>
-        <${Icon.clock} />
-        <div class="grow">
-          ${dl.waitingOn
-            ? html`<div class="big">${waitingLabel[dl.waitingOn]}${dl.dueAt ? html` · inquiry window ends ${fmtDate(dl.dueAt)} <span class="chip">Estimate</span>` : null}</div>`
-            : dl.dueAt
-            ? html`<div class="big">Respond by ${fmtDate(dl.dueAt)} · ${fmtRemaining(dl.dueAt, now)}${dl.isEstimate ? html` <span class="chip warn">Estimate</span>` : null}</div>`
-            : html`<div class="big">${dl.urgency === 'closed' ? 'No response due' : 'No response date available'}</div>`}
-          <div class="small muted">${dl.basis}</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <h3>Case facts</h3>
-      <div class="facts">
-        <${Fact} k="Buyer">${d.buyer.name || '—'}${d.buyer.email ? html`<div class="small muted">${d.buyer.email}</div>` : null}<//>
-        <${Fact} k="Seller">${d.seller.name || '—'}${d.seller.email ? html`<div class="small muted">${d.seller.email}</div>` : null}<//>
-        <${Fact} k="Seller transaction" mono>${txn?.sellerTransactionId || '—'}<//>
-        <${Fact} k="Buyer transaction" mono>${txn?.buyerTransactionId || '—'}<//>
-        <${Fact} k="Paid">${fmtDate(txn?.createdAt)}<//>
-        <${Fact} k="Dispute opened">${fmtDate(d.createdAt)}<//>
-        <${Fact} k="Buyer asks for">${fmtMoney(d.buyerRequestedAmount)}<//>
-        <${Fact} k="Refund allowed up to">${fmtMoney(d.allowedRefundAmount)}<//>
-        <${Fact} k="Seller protection">${txn?.sellerProtectionEligible === null || !txn ? '—' : txn.sellerProtectionEligible ? 'Eligible' : 'Not eligible'}<//>
-        <${Fact} k="Channel">${humanize(d.channel)}<//>
-        <${Fact} k=${items.length > 1 ? 'Items' : 'Item'}>${items.length ? items.map((i) => html`<div>${i.name || 'Unnamed item'}${i.quantity ? ` × ${i.quantity}` : ''}${i.type ? html` <span class="faint small">(${humanize(i.type)})</span>` : null}</div>`) : '—'}<//>
-        <${Fact} k="PayPal allows now">${d.allowedActions.length ? html`<div class="row wrap" style="gap:5px;margin-top:3px">${d.allowedActions.map((a) => html`<span class="chip">${detail.actionLabels[a]}</span>`)}</div>` : 'No seller actions open'}<//>
-      </div>
-    </section>
-
-    <section class="card">
-      <h3>Messages <span class="count">${d.messages.length}</span></h3>
-      ${d.messages.length === 0
-        ? html`<p class="muted small">No messages on this case.</p>`
-        : html`<div class="thread">
-            ${d.messages.map((m) => html`<div class=${`bubble ${m.postedBy === 'SELLER' ? 'seller' : ''}`}>
-              <div class="who">${m.postedBy} · ${fmtDate(m.at)}</div>
-              <div class="pre">${m.content}</div>
-            </div>`)}
-          </div>`}
-    </section>
-
-    <section class="card">
-      <h3>PayPal evidence trail <span class="count">${d.evidences.length}</span></h3>
-      ${d.evidences.length === 0
-        ? html`<p class="muted small">PayPal has not recorded any evidence on this case.</p>`
-        : html`<ul class="timeline">
-            ${d.evidences.map((e) => html`<li class=${e.source === 'REQUESTED_FROM_SELLER' ? 'danger' : ''}>
-              <div><strong>${humanize(e.type)}</strong> <span class="muted">· ${humanize(e.source)}</span></div>
-              ${e.notes ? html`<div class="pre small">${e.notes}</div>` : null}
-              <div class="when">${fmtDate(e.at)}${e.stage ? ` · ${humanize(e.stage)}` : ''}</div>
-            </li>`)}
-          </ul>`}
-    </section>
-
-    <${EvidenceLocker} detail=${detail} config=${config} run=${run} busy=${busy} />
-
-    <section class="card">
-      <h3>Case history <span class="count">${detail.history.length}</span></h3>
-      <${ActivityList} items=${detail.history} />
-    </section>
-  </div>`;
-}
-
-// ---------- right column: AI analysis + approval ----------
-
-function Gauge({ score, label }) {
-  const r = 38;
-  const c = 2 * Math.PI * r;
-  const pct = Math.max(0, Math.min(100, score));
-  return html`<div class="gauge">
-    <svg viewBox="0 0 92 92"><circle class="track" cx="46" cy="46" r=${r} /><circle class=${`bar tone-${label}`} cx="46" cy="46" r=${r} stroke-dasharray=${c} stroke-dashoffset=${c * (1 - pct / 100)} /></svg>
-    <div class=${`num tone-${label}`}>${Math.round(pct)}<small>of 100</small></div>
-  </div>`;
-}
+// ---------- case review (analysis) + suggested response ----------
 
 function SendResult({ result, onFallback, labels }) {
   if (!result) return null;
   if (result.ok) {
-    return html`<div class="notice ok"><${Icon.check} /><div><strong>PayPal accepted it.</strong> "${labels[result.action]}" returned HTTP ${result.status}. The case has been re-synced.</div></div>`;
+    return html`<${Notice} tone="ok" icon=${Icon.check} title="Sent to PayPal">
+      PayPal accepted "${labels[result.action]}" (HTTP ${result.status}). The case has been refreshed.
+    <//>`;
   }
   const e = result.error;
   return html`<div class="stack">
-    <div class="notice danger"><${Icon.alert} />
-      <div>
-        <strong>Not sent. PayPal refused "${labels[result.action]}".</strong>
-        <div>${e.plain}</div>
-        <div class="small mono" style="margin-top:6px">${[e.status ? `HTTP ${e.status}` : null, e.name, e.issue].filter(Boolean).join(' · ')}</div>
-        ${e.message ? html`<div class="small muted">PayPal said: ${e.message}</div>` : null}
-        ${e.debugId ? html`<div class="small faint">Debug ID: <span class="mono">${e.debugId}</span></div>` : null}
-      </div>
-    </div>
-    <${Btn} class="block" icon=${Icon.external} onClick=${onFallback}>Copy response + open Resolution Center<//>
+    <${Notice} tone="danger" icon=${Icon.alert} title="Your response wasn't sent">
+      <div>PayPal didn't accept "${labels[result.action]}". ${e.plain}</div>
+      <div class="small mono mt-8">${[e.status ? `HTTP ${e.status}` : null, e.name, e.issue].filter(Boolean).join(' · ')}</div>
+      ${e.message ? html`<div class="small muted">PayPal's message: ${e.message}</div>` : null}
+      ${e.debugId ? html`<div class="small muted">Debug ID: <span class="mono">${e.debugId}</span></div>` : null}
+    <//>
+    <div><${Btn} class="sm" onClick=${onFallback}>Copy response and open Resolution Center<//></div>
   </div>`;
 }
 
-function AnalysisPanel({ detail, config, run, busy, toast, refresh }) {
+function CaseReview({ detail, config, run, busy, toast, refresh }) {
   const a = detail.analysis?.result;
   const d = detail.dispute;
   const [draft, setDraft] = useState(detail.draft);
+  const [editing, setEditing] = useState(false);
   const [action, setAction] = useState('send-message');
   const [offer, setOffer] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState(null);
   const max = config.limits.maxMessageChars;
 
-  // Reset the editor when a different case or a fresh analysis arrives.
+  // Reset the editor when a different case or a fresh review arrives.
   useEffect(() => {
     setDraft(detail.draft);
+    setEditing(false);
     setResult(null);
-    const rec = a ? RECOMMENDED_TO_ACTION[a.recommendedAction.action] : 'send-message';
-    setAction(rec);
+    setAction(a ? RECOMMENDED_TO_ACTION[a.recommendedAction.action] : 'send-message');
     setOffer(d.allowedRefundAmount?.value || d.amount?.value || '');
   }, [detail.id, detail.analysis?.at]);
 
   const saveDraft = () => {
     if (draft !== detail.draft && draft.length <= max) call('PUT', `/cases/${detail.id}/draft`, { draft }).then(refresh).catch((e) => toast(e.message, true));
+  };
+  const doneEditing = () => {
+    saveDraft();
+    setEditing(false);
   };
   const copy = async () => {
     if (await copyText(draft)) {
@@ -332,11 +360,12 @@ function AnalysisPanel({ detail, config, run, busy, toast, refresh }) {
       call('POST', `/cases/${detail.id}/copied`).then(refresh).catch(() => {});
       return true;
     }
-    toast('Could not copy. Select the text and copy it manually.', true);
+    toast("Couldn't copy. Select the text and copy it yourself.", true);
     return false;
   };
   const send = async () => {
     setConfirming(false);
+    setEditing(false);
     setResult(null);
     await run('send', async () => {
       const out = await call('POST', `/cases/${detail.id}/send`, { approved: true, action, message: draft, offerAmount: action === 'make-offer' ? offer : undefined });
@@ -348,121 +377,155 @@ function AnalysisPanel({ detail, config, run, busy, toast, refresh }) {
     await copy();
     window.open(detail.resolutionCenterUrl, '_blank', 'noopener');
   };
+  const review = () => run('analyze', () => call('POST', `/cases/${detail.id}/analyze`), 'Case review is ready');
 
   const stale = a && (detail.evidence.some((e) => e.addedAt > detail.analysis.at) || detail.history.some((h) => h.type === 'evidence_removed' && h.at > detail.analysis.at));
   const attachable = detail.evidence.filter((e) => e.paypalAttachable);
   const allowed = d.allowedActions.includes(action);
-  const analyzeBtn = (label, cls = 'primary') =>
-    html`<${Btn} class=${cls} icon=${Icon.spark} busy=${busy.analyze} disabled=${!config.ai.configured}
-      onClick=${() => run('analyze', () => call('POST', `/cases/${detail.id}/analyze`), 'Analysis ready')}>${label}<//>`;
+  const pct = a ? Math.max(0, Math.min(100, Math.round(a.strength.score))) : 0;
 
   return html`
-    <div class="panel-head">
-      <h2><${Icon.spark} /> AI case analysis</h2>
-      ${a && !busy.analyze ? analyzeBtn('Re-analyze', 'sm') : null}
-    </div>
+    <section class="card" id="case-review">
+      <div class="row between top wrap">
+        <h2>Case review</h2>
+        ${a && !busy.analyze ? html`<${LinkBtn} disabled=${!config.ai.configured} onClick=${review}>Review again<//>` : null}
+      </div>
 
-    ${!config.ai.configured ? html`<div class="notice warn" style="margin-bottom:14px"><${Icon.alert} /><div><strong>AI is not configured.</strong> ${config.ai.problem}</div></div>` : null}
+      ${!config.ai.configured ? html`<${Notice} tone="warn" icon=${Icon.alert} title="Case review isn't set up" class="mt-8">${config.ai.problem}<//>` : null}
 
-    ${busy.analyze
-      ? html`<div aria-busy="true">
-          <p class="muted small" style="margin-bottom:14px">Reading the case and ${detail.evidence.length} evidence item${detail.evidence.length === 1 ? '' : 's'}…</p>
-          <div class="skeleton sk-block"></div>
-          ${[92, 100, 78, 96, 64, 88].map((w) => html`<div class="skeleton sk-line" style=${`width:${w}%`}></div>`)}
-        </div>`
-      : !a
-        ? html`<div class="empty">
-            <${Icon.spark} />
-            <h3>Not analysed yet</h3>
-            <p>The AI reads the PayPal case and your evidence locker, scores how strong your position is, lists the proof you are missing and drafts a response for you to review.</p>
-            ${analyzeBtn(detail.evidence.length ? 'Analyze case' : 'Analyze without evidence')}
-            ${detail.evidence.length === 0 ? html`<p class="small" style="margin-top:12px">Tip: add evidence first for a stronger, more specific draft.</p>` : null}
+      ${busy.analyze
+        ? html`<div aria-busy="true" class="mt-16">
+            <p class="muted">Reviewing the case and ${plural(detail.evidence.length, 'evidence item')}. This usually takes 10 to 20 seconds.</p>
+            <div class="mt-16">${[100, 92, 78, 96, 60].map((w) => html`<div class="skeleton sk-line" style=${`width:${w}%`}></div>`)}</div>
           </div>`
-        : html`
-            ${stale ? html`<div class="notice warn" style="margin-bottom:14px"><${Icon.info} /><div><strong>Evidence changed since this analysis.</strong> Re-analyze to update the score and draft.</div></div>` : null}
-            <div class="strength">
-              <${Gauge} score=${a.strength.score} label=${a.strength.label} />
-              <div>
-                <div class="faint small">${a.disputeType}</div>
-                <div class=${`label tone-${a.strength.label}`}>${a.strength.label} case</div>
-                <div class="small">${a.strength.reasoning}</div>
+        : !a
+          ? html`<div class="mt-8 stack">
+              <p class="muted">Get a second opinion before you respond. We'll compare the case with your evidence, tell you how strong your position looks, list any proof that's missing and suggest a response. You decide what gets sent.</p>
+              ${detail.evidence.length === 0 ? html`<p class="muted small">You haven't added any evidence. The review will be more useful if you add it first.</p>` : null}
+              <div><${Btn} class="primary" disabled=${!config.ai.configured} onClick=${review}>Review this case<//></div>
+            </div>`
+          : html`
+              ${stale ? html`<${Notice} tone="warn" title="Your evidence has changed" class="mt-8">Review the case again to update the assessment and the suggested response.<//>` : null}
+
+              <div class="mt-16">
+                <h3>How strong your case looks</h3>
+                <div class="meter-head mt-8">
+                  <span class="meter-score">${pct}</span><span class="muted">out of 100</span>
+                  <span class=${`pill ${{ weak: 'danger', moderate: 'warn', strong: 'ok' }[a.strength.label]}`}>${STRENGTH_LABEL[a.strength.label]}</span>
+                </div>
+                <div class="meter" role="img" aria-label=${`Case strength ${pct} out of 100, ${a.strength.label}`}><span class=${a.strength.label} style=${`width:${pct}%`}></span></div>
+                <p>${a.strength.reasoning}</p>
+                <p class="muted small mt-4">Dispute type: ${a.disputeType}</p>
               </div>
-            </div>
 
-            <div class="panel-block">
-              <h3>Recommended next step</h3>
-              <div class="action-card">
-                <div class="a">${RECOMMENDED_LABEL[a.recommendedAction.action]}</div>
-                <div class="small" style="margin-top:4px">${a.recommendedAction.rationale}</div>
-                <div class="small muted" style="margin-top:6px"><strong>Trade-offs:</strong> ${a.recommendedAction.tradeoffs}</div>
+              <div class="section">
+                <h3>Recommended next step</h3>
+                <p><strong>${RECOMMENDED_LABEL[a.recommendedAction.action]}.</strong> ${a.recommendedAction.rationale}</p>
+                <p class="muted mt-8">Keep in mind: ${a.recommendedAction.tradeoffs}</p>
               </div>
+
+              <div class="section">
+                <h3>Missing evidence${a.missingEvidence.length ? ` (${a.missingEvidence.length})` : ''}</h3>
+                ${a.missingEvidence.length === 0
+                  ? html`<p class="muted">Nothing important appears to be missing, based on what you've added.</p>`
+                  : html`<ul class="checklist">${a.missingEvidence.map((m) => html`<li>
+                      <span class="box" aria-hidden="true"></span>
+                      <div class="grow">
+                        <div class="row between top"><span class="item">${m.item}</span><span class=${`pill ${PRIORITY[m.priority].tone}`}>${PRIORITY[m.priority].label}</span></div>
+                        <div class="muted">${m.why}</div>
+                      </div>
+                    </li>`)}</ul>`}
+              </div>
+
+              <div class="section">
+                <h3>What PayPal usually needs for this kind of dispute</h3>
+                <ul class="bullets">${a.whatPayPalNeeds.map((w) => html`<li>${w}</li>`)}</ul>
+              </div>
+
+              ${a.assumptions.length
+                ? html`<div class="section"><h3>Assumptions made in this review</h3><ul class="bullets muted">${a.assumptions.map((w) => html`<li>${w}</li>`)}</ul></div>`
+                : null}
+
+              <p class="muted small mt-16">Reviewed ${fmtDate(detail.analysis.at)} · Automated review by ${detail.analysis.model} (${detail.analysis.provider}). It can be wrong, so check it against your records.</p>
+            `}
+    </section>
+
+    ${a && !busy.analyze
+      ? html`<section class="card">
+          <div class="row between top wrap">
+            <h2>Suggested response</h2>
+            ${editing ? html`<${LinkBtn} onClick=${doneEditing}>Done editing<//>` : html`<${LinkBtn} onClick=${() => setEditing(true)}>Edit<//>`}
+          </div>
+          <div class="stack mt-8">
+            ${editing
+              ? html`<label class="field">Your response
+                  <textarea class="input" rows="12" value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${saveDraft}></textarea>
+                </label>`
+              : html`<div class="draft-read pre">${draft || html`<span class="muted">The response is empty. Choose Edit to write one.</span>`}</div>`}
+            <div class="row between">
+              <span class="muted small">Review your response and check every fact before you send it.</span>
+              <span class=${`counter ${draft.length > max ? 'over' : ''}`}>${draft.length} / ${max}</span>
             </div>
 
-            <div class="panel-block">
-              <h3>Missing evidence <span class="count">${a.missingEvidence.length}</span></h3>
-              ${a.missingEvidence.length === 0
-                ? html`<p class="small muted">Nothing important is missing, based on what is on file.</p>`
-                : html`<div class="missing">${a.missingEvidence.map((m) => html`<div class="m">
-                    <div class="t"><span>${m.item}</span><span class=${`chip ${{ high: 'danger', medium: 'warn', low: '' }[m.priority]}`}>${m.priority}</span></div>
-                    <div class="small muted">${m.why}</div>
-                  </div>`)}</div>`}
+            <div class="respond-fields">
+              <label class="field">How to respond
+                <select class="input" value=${action} onChange=${(e) => { setAction(e.target.value); setResult(null); }}>
+                  ${Object.entries(detail.actionLabels).map(([k, label]) => html`<option value=${k}>${label}${d.allowedActions.includes(k) ? '' : ' (not available now)'}</option>`)}
+                </select>
+              </label>
+              ${action === 'make-offer'
+                ? html`<label class="field">Refund amount (${d.amount?.currency || 'USD'})
+                    <input class="input" inputmode="decimal" value=${offer} onInput=${(e) => setOffer(e.target.value)} />
+                  </label>`
+                : null}
             </div>
-
-            <div class="panel-block">
-              <h3>What PayPal needs for this dispute</h3>
-              <ul class="small">${a.whatPayPalNeeds.map((w) => html`<li>${w}</li>`)}</ul>
-            </div>
-
-            ${a.assumptions.length
-              ? html`<div class="panel-block"><h3>Assumptions the AI made</h3><ul class="small muted">${a.assumptions.map((w) => html`<li>${w}</li>`)}</ul></div>`
+            ${action === 'provide-evidence'
+              ? html`<p class="muted small">Your response is sent to PayPal as the evidence note${attachable.length ? html`, with ${plural(attachable.length, 'attachment')} (${attachable.map((e) => e.file.name).join(', ')})` : ''}. PayPal accepts JPG, PNG, GIF and PDF attachments. Text files stay here.</p>`
               : null}
+            ${!allowed && !result ? html`<${Notice} tone="warn">PayPal doesn't list this option as available for the case right now. You can still try. If PayPal declines, you'll see why.<//>` : null}
 
-            <div class="panel-block">
-              <h3>Your response <span class="count">draft, edit freely</span></h3>
-              <div class="stack">
-                <textarea class="input draft" value=${draft} onInput=${(e) => setDraft(e.target.value)} onBlur=${saveDraft} aria-label="Response draft"></textarea>
-                <div class="row between">
-                  <span class="faint small">Check every fact before you approve.</span>
-                  <span class=${`counter ${draft.length > max ? 'over' : ''}`}>${draft.length} / ${max}</span>
-                </div>
-                <label class="field">Send via PayPal as
-                  <select class="input" value=${action} onChange=${(e) => { setAction(e.target.value); setResult(null); }}>
-                    ${Object.entries(detail.actionLabels).map(([k, label]) => html`<option value=${k}>${label}${d.allowedActions.includes(k) ? '' : ' (not open now)'}</option>`)}
-                  </select>
-                </label>
-                ${action === 'make-offer'
-                  ? html`<label class="field">Refund offer (${d.amount?.currency || 'USD'})
-                      <input class="input" inputmode="decimal" value=${offer} onInput=${(e) => setOffer(e.target.value)} />
-                    </label>`
-                  : null}
-                ${action === 'provide-evidence'
-                  ? html`<p class="small muted">Sends the text above as the evidence note${attachable.length ? html`, with ${attachable.length} attachment${attachable.length === 1 ? '' : 's'} (${attachable.map((e) => e.file.name).join(', ')})` : ''}. PayPal accepts JPG, PNG, GIF and PDF attachments; text files stay in the locker.</p>`
-                  : null}
-                ${!allowed && !result ? html`<div class="notice warn"><${Icon.info} /><div>PayPal does not list this action as open for the case right now. You can still try; any refusal is shown here.</div></div>` : null}
-                <div class="row">
-                  <${Btn} class="primary grow" icon=${Icon.send} busy=${busy.send} disabled=${!draft.trim() || draft.length > max} onClick=${() => setConfirming(true)}>Approve & send<//>
-                  <${Btn} icon=${Icon.copy} disabled=${!draft.trim()} onClick=${copy}>Copy response<//>
-                </div>
-                <${SendResult} result=${result} onFallback=${fallback} labels=${detail.actionLabels} />
-              </div>
+            <div class="actions">
+              <${Btn} class="primary" busy=${busy.send} disabled=${!draft.trim() || draft.length > max} onClick=${() => setConfirming(true)}>Approve & send<//>
+              <${Btn} disabled=${!draft.trim()} onClick=${copy}>Copy<//>
             </div>
-
-            <p class="human-note">Analysed ${fmtDate(detail.analysis.at)} by ${detail.analysis.model} (${detail.analysis.provider}). The AI drafts; you decide. Nothing is sent without your approval.</p>
-          `}
+            <${SendResult} result=${result} onFallback=${fallback} labels=${detail.actionLabels} />
+            <p class="muted small">Nothing is sent to PayPal until you approve it.</p>
+          </div>
+        </section>`
+      : null}
 
     ${confirming
-      ? html`<${Modal} title="Approve and send to PayPal?" onClose=${() => setConfirming(false)}
-          footer=${html`<${Btn} onClick=${() => setConfirming(false)}>Cancel<//><${Btn} class=${action === 'accept-claim' ? 'danger' : 'primary'} icon=${Icon.send} onClick=${send}>Yes, send it<//>`}>
+      ? html`<${Modal} title="Review your response" onClose=${() => setConfirming(false)}
+          footer=${html`<${Btn} onClick=${() => setConfirming(false)}>Go back<//><${Btn} class=${action === 'accept-claim' ? 'danger' : 'primary'} onClick=${send}>Send to PayPal<//>`}>
           <div class="stack">
-            <div>Action: <strong>${detail.actionLabels[action]}</strong> on case <span class="mono">${detail.id}</span></div>
-            ${action === 'accept-claim' ? html`<div class="notice danger"><${Icon.alert} /><div><strong>This refunds the buyer in full and closes the case.</strong> It cannot be undone.</div></div>` : null}
-            ${action === 'escalate' ? html`<div class="notice warn"><${Icon.alert} /><div><strong>This turns the inquiry into a claim.</strong> PayPal will decide the outcome.</div></div>` : null}
-            ${action === 'make-offer' ? html`<div>Refund offer: <strong>${offer} ${d.amount?.currency || 'USD'}</strong></div>` : null}
-            <div class="quote pre">${draft}</div>
-            <p class="small muted">This goes to PayPal exactly as written. You are responsible for its accuracy.</p>
+            <dl class="facts">
+              <${Fact} label="Action">${detail.actionLabels[action]}<//>
+              <${Fact} label="Case" mono>${detail.id}<//>
+              ${action === 'make-offer' ? html`<${Fact} label="Refund offer">${offer} ${d.amount?.currency || 'USD'}<//>` : null}
+            </dl>
+            ${action === 'accept-claim' ? html`<${Notice} tone="danger" icon=${Icon.alert} title="This refunds the buyer in full">The case will be closed and this can't be undone.<//>` : null}
+            ${action === 'escalate' ? html`<${Notice} tone="warn" icon=${Icon.alert} title="This escalates the case to a claim">PayPal will review the case and decide the outcome.<//>` : null}
+            <div class="draft-read pre">${draft}</div>
+            <p class="muted small">This is sent to PayPal exactly as written.</p>
           </div>
         <//>`
       : null}
+  `;
+}
+
+function CaseDetail({ detail, config, now, run, busy, toast, refresh, onRemove, onBack }) {
+  return html`
+    <${LinkBtn} class="back-link" onClick=${onBack}><${Icon.back} />All cases<//>
+    <${DeadlineBanner} deadline=${detail.deadline} now=${now} />
+    <${CaseHeader} detail=${detail} now=${now} run=${run} busy=${busy} onRemove=${onRemove} />
+    <${CaseDetails} detail=${detail} />
+    <${Messages} dispute=${detail.dispute} />
+    <${Evidence} detail=${detail} config=${config} run=${run} busy=${busy} />
+    <${CaseReview} detail=${detail} config=${config} run=${run} busy=${busy} toast=${toast} refresh=${refresh} />
+    <section class="card">
+      <h2>Case history</h2>
+      <${ActivityList} items=${detail.history} />
+    </section>
   `;
 }
 
@@ -485,13 +548,17 @@ function Login({ onDone }) {
       setBusy(false);
     }
   };
-  return html`<form class="card login stack" onSubmit=${submit}>
-    <div class="brand"><${Icon.shield} /> Dispute Defender</div>
-    <p class="muted small">This demo is protected by a shared password.</p>
-    <input class="input" type="password" placeholder="Password" aria-label="Password" autofocus value=${password} onInput=${(e) => setPassword(e.target.value)} />
-    ${error ? html`<div class="notice danger"><${Icon.alert} /><div>${error}</div></div>` : null}
-    <button class="btn primary" type="submit" disabled=${busy || !password}>${busy ? html`<span class="spinner"></span>` : null}Enter</button>
-  </form>`;
+  return html`<div class="login">
+    <form class="card stack" onSubmit=${submit}>
+      <div class="brand"><${Icon.shield} /> Dispute Defender</div>
+      <p class="muted">Enter the password to open this demo.</p>
+      <label class="field">Password
+        <input class="input" type="password" autofocus value=${password} onInput=${(e) => setPassword(e.target.value)} />
+      </label>
+      ${error ? html`<${Notice} tone="danger" icon=${Icon.alert}>${error}<//>` : null}
+      <button class="btn primary block" type="submit" disabled=${busy || !password}>${busy ? html`<span class="spinner" aria-hidden="true"></span>` : null}Continue</button>
+    </form>
+  </div>`;
 }
 
 function App() {
@@ -555,6 +622,7 @@ function App() {
   useEffect(() => {
     setDetail(null);
     setDetailError('');
+    window.scrollTo(0, 0);
     if (ready) loadDetail(selectedId);
   }, [selectedId, ready]);
   // Pick up webhook-driven changes without a manual reload.
@@ -592,7 +660,7 @@ function App() {
       const out = await call('POST', '/cases', { disputeId: id, demo });
       await loadCases();
       select(out.id);
-      toast(out.created ? 'Case added' : 'Case already tracked; synced');
+      toast(out.created ? 'Case added' : 'You already track this case. It has been refreshed.');
       return true;
     } catch (e) {
       toast(e.paypal?.issue || e.paypal?.name ? `${e.message} (${e.paypal.issue || e.paypal.name})` : e.message, true);
@@ -608,7 +676,7 @@ function App() {
       await call('DELETE', `/cases/${selectedId}`);
       select('');
       await loadCases();
-      toast('Case removed from Dispute Defender');
+      toast('Case removed');
     } catch (e) {
       toast(e.message, true);
     }
@@ -623,63 +691,57 @@ function App() {
     }
   };
 
-  if (bootError) return html`<div class="empty big"><${Icon.alert} /><h3>Cannot reach the server</h3><p>${bootError}</p><${Btn} class="primary" onClick=${() => location.reload()}>Retry<//></div>`;
-  if (!session) return html`<div class="boot">Loading Dispute Defender…</div>`;
+  if (bootError) return html`<div class="login"><div class="card empty-page"><h2>We can't reach the server</h2><p>${bootError}</p><${Btn} class="primary" onClick=${() => location.reload()}>Try again<//></div></div>`;
+  if (!session) return html`<div class="boot">Loading…</div>`;
   if (!session.authed) return html`<${Login} onDone=${loadSession} />`;
   const config = session.config;
 
-  return html`<div class="shell">
+  return html`
     <header class="topbar">
-      <div class="brand"><${Icon.shield} /> Dispute Defender</div>
-      <span class="tagline">Evidence-first dispute defence for small sellers</span>
-      <div class="grow"></div>
-      <span class="chip warn" title="All PayPal calls go to the sandbox">PayPal sandbox</span>
-      <span class=${`chip ${config.webhookConfigured ? 'ok' : ''}`} title=${config.webhookConfigured ? 'Webhook signature verification is configured' : 'PAYPAL_WEBHOOK_ID is not set; add cases by ID'}>Webhooks ${config.webhookConfigured ? 'on' : 'off'}</span>
-      <${Btn} class="sm" icon=${Icon.list} onClick=${openFeed}>Activity<//>
+      <div class="topbar-inner">
+        <a class="brand" href="#" onClick=${(e) => { e.preventDefault(); select(''); }}><${Icon.shield} /> Dispute Defender</a>
+        <div class="grow"></div>
+        ${config.webhookConfigured ? html`<span class="pill hide-sm" title="A PayPal webhook ID is set, so incoming events can be verified. The sandbox may not send dispute events.">Webhook endpoint configured</span>` : null}
+        <span class="pill warn" title="All PayPal calls go to the sandbox. No real money moves.">Sandbox</span>
+        <${LinkBtn} onClick=${openFeed}>Activity<//>
+      </div>
     </header>
 
-    ${!config.paypalConfigured ? html`<div class="notice danger" style="border-radius:0"><${Icon.alert} /><div><strong>PayPal credentials are missing.</strong> Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET on the server.</div></div>` : null}
+    ${!config.paypalConfigured ? html`<div class="banner-strip" role="alert"><strong>PayPal isn't connected.</strong> Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET on the server.</div>` : null}
 
-    <div class="columns">
-      <aside class="col col-left">
-        <${CaseList} cases=${cases} selectedId=${selectedId} now=${now} onSelect=${select} onAdd=${addCase} adding=${busy.add} demoCaseId=${config.demoCaseId} loaded=${casesLoaded} />
+    <div class=${`page ${selectedId ? 'has-selection' : ''}`}>
+      <aside class="sidebar">
+        <${Sidebar} cases=${cases} selectedId=${selectedId} now=${now} onSelect=${select} onAdd=${addCase} adding=${busy.add} config=${config} loaded=${casesLoaded} />
       </aside>
-      <main class="col">
+      <main class="detail">
         ${detail
-          ? html`<${CaseDetail} detail=${detail} config=${config} now=${now} run=${run} busy=${busy} onRemove=${() => setRemoving(true)} />`
+          ? html`<${CaseDetail} detail=${detail} config=${config} now=${now} run=${run} busy=${busy} toast=${toast}
+              refresh=${() => loadDetail(selectedRef.current)} onRemove=${() => setRemoving(true)} onBack=${() => select('')} />`
           : detailError
-            ? html`<div class="empty big"><${Icon.alert} /><h3>Could not open this case</h3><p>${detailError}</p><${Btn} onClick=${() => select('')}>Back to cases<//></div>`
+            ? html`<section class="card empty-page"><h2>We couldn't open this case</h2><p>${detailError}</p><${Btn} onClick=${() => select('')}>Back to your cases<//></section>`
             : selectedId
-              ? html`<div class="detail"><div class="skeleton sk-block" style="height:170px"></div><div class="skeleton sk-block" style="height:150px"></div><div class="skeleton sk-block"></div></div>`
-              : html`<div class="empty big">
-                  <${Icon.shieldOutline} />
-                  <h3>${cases.length ? 'Select a case' : 'Defend your first dispute'}</h3>
+              ? html`<div class="skeleton sk-card"></div><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>`
+              : html`<section class="card empty-page">
+                  <h2>${cases.length ? 'Select a case' : 'Respond to PayPal disputes with confidence'}</h2>
                   <p>${cases.length
-                    ? 'Pick a case on the left to see the PayPal details, your evidence locker and the AI analysis.'
-                    : 'Dispute Defender pulls a PayPal dispute, checks your evidence, tells you what proof is missing and drafts a response. You approve everything before it is sent.'}</p>
-                </div>`}
+                    ? 'Choose a case to see its details, add your evidence and prepare a response.'
+                    : "Add a case to see its details and deadline, keep your evidence in one place, and prepare a response. Nothing is sent to PayPal until you approve it."}</p>
+                </section>`}
       </main>
-      <aside class="col col-right">
-        ${detail
-          ? html`<${AnalysisPanel} detail=${detail} config=${config} run=${run} busy=${busy} toast=${toast} refresh=${() => loadDetail(selectedRef.current)} />`
-          : html`<div class="panel-head"><h2><${Icon.spark} /> AI case analysis</h2></div>
-              <p class="muted small">Select a case to see its strength score, missing evidence, recommended next step and a draft response.</p>
-              <p class="faint small" style="margin-top:10px">Model: ${config.ai.configured ? `${config.ai.model} (${config.ai.provider})` : 'not configured'}</p>`}
-      </aside>
     </div>
 
-    ${feed ? html`<${Modal} title="Activity feed" wide onClose=${() => setFeed(null)}>
-      <p class="muted small" style="margin-bottom:14px">Every sync, analysis, send attempt and PayPal webhook delivery, newest first.</p>
-      <${ActivityList} items=${feed} showCase />
+    ${feed ? html`<${Modal} title="Activity" wide onClose=${() => setFeed(null)}>
+      <p class="muted small">Everything that has happened across your cases, newest first.</p>
+      <div class="mt-16"><${ActivityList} items=${feed} showCase /></div>
     <//>` : null}
 
     ${removing ? html`<${Modal} title="Stop tracking this case?" onClose=${() => setRemoving(false)}
-      footer=${html`<${Btn} onClick=${() => setRemoving(false)}>Cancel<//><${Btn} class="danger" onClick=${removeCase}>Stop tracking<//>`}>
-      <p>This removes <span class="mono">${selectedId}</span>, its evidence locker and analysis from Dispute Defender. Nothing changes at PayPal, and you can add the case again by ID.</p>
+      footer=${html`<${Btn} onClick=${() => setRemoving(false)}>Keep case<//><${Btn} class="danger" onClick=${removeCase}>Stop tracking<//>`}>
+      <p>Case <span class="mono">${selectedId}</span> will be removed from Dispute Defender, along with the evidence and review you saved here. Nothing changes at PayPal, and you can add the case again later.</p>
     <//>` : null}
 
     <div class="toasts" role="status" aria-live="polite">${toasts.map((t) => html`<div key=${t.id} class=${`toast ${t.error ? 'error' : ''}`}>${t.text}</div>`)}</div>
-  </div>`;
+  `;
 }
 
 render(html`<${App} />`, document.getElementById('app'));

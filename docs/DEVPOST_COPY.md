@@ -95,7 +95,7 @@ person, accepted by PayPal (HTTP 200) and then visible on the PayPal case.
 - Honest failure handling. The app never claims a send succeeded unless PayPal said so.
 - A draft that only cites evidence actually on file, and a list of what is missing instead of confident
   guesses.
-- A clean, fast dashboard with no front-end build step, in light and dark themes.
+- A calm, familiar-feeling dashboard that works down to phone width, with no front-end build step.
 
 ## What we learned
 
@@ -136,6 +136,6 @@ person, accepted by PayPal (HTTP 200) and then visible on the PayPal case.
 ## Testing instructions for judges
 
 1. Open the live demo (password, if set: _fill in_).
-2. Click **Add the demo case**, then **Add sample evidence**, then **Analyze case**.
-3. Edit the draft and click **Approve & send** to see PayPal's real response.
+2. Click **Add the demo case**, then **Use sample evidence**, then **Review this case**.
+3. Edit the suggested response and click **Approve & send**, then **Send to PayPal**, to see PayPal's real response.
 4. To open a new dispute, use the sandbox buyer login in the README and follow "Reproduce a sandbox dispute".

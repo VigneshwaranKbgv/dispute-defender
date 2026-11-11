@@ -41,8 +41,8 @@ Small online sellers and freelancers who take payments through PayPal and handle
 | **Deadline tracking** | Uses PayPal's `seller_response_due_date` when present. Otherwise estimates the 20-day inquiry window and labels it clearly as an estimate. |
 | **Evidence locker** | Per case: delivery proof, tracking, chat transcripts, invoices or contracts, other. Notes plus optional TXT, MD, CSV, PNG, JPG, WEBP, GIF or PDF upload (validated, 2 MB limit). |
 | **AI analysis** | A 0-100 strength score with reasoning, what PayPal needs for this dispute type, a prioritised list of missing evidence, a recommended action (refund, contest, ask the buyer, escalate) with trade-offs, the assumptions the model made, and a draft response. Output is schema-validated and retried once if invalid. |
-| **Human approval** | The draft is editable. **Approve & send** asks for confirmation, then calls the matching PayPal action. **Copy response** is always available. |
-| **Honest results** | Success is shown only when PayPal returns 2xx. A refusal shows PayPal's exact error code, a plain-English explanation, the debug ID, and a "Copy response + open Resolution Center" fallback. |
+| **Human approval** | The draft is editable. **Approve & send** asks for confirmation, then calls the matching PayPal action. **Copy** is always available. |
+| **Honest results** | Success is shown only when PayPal returns 2xx. A refusal shows PayPal's exact error code, a plain-English explanation, the debug ID, and a "Copy response and open Resolution Center" fallback. |
 | **Audit log** | Every sync, analysis, edit, copy, send attempt and webhook delivery is recorded per case and in a global activity feed. |
 
 ## Architecture
@@ -50,7 +50,7 @@ Small online sellers and freelancers who take payments through PayPal and handle
 ```mermaid
 flowchart LR
   subgraph Browser
-    UI["Dashboard (Preact + htm, no bundler)<br/>cases · detail · AI panel"]
+    UI["Dashboard (Preact + htm, no bundler)<br/>case list · case detail · case review"]
   end
   subgraph Server["Node 22 + Express (TypeScript)"]
     API["JSON API<br/>src/app.ts"]
@@ -155,10 +155,10 @@ All variables are described in [`.env.example`](.env.example). The app refuses t
 ### Try it in two minutes
 
 1. Click **Add the demo case** (or paste a dispute ID from your own sandbox account).
-2. In the evidence locker, click **Add sample evidence** (fictional files from
+2. Under **Your evidence**, click **Use sample evidence** (fictional files from
    [`docs/sample-evidence/`](docs/sample-evidence/)), or upload your own.
-3. Click **Analyze case**. Read the score, the missing evidence and the draft.
-4. Edit the draft, choose how to send it, click **Approve & send**, confirm, and see what PayPal answers.
+3. Click **Review this case**. Read the strength score, the missing evidence and the suggested response.
+4. Click **Edit** to change the response, choose how to respond, click **Approve & send**, confirm with **Send to PayPal**, and see what PayPal answers.
 
 The demo case `PP-R-BYM-10198930` belongs to the project's sandbox seller account, so it only loads with that
 account's credentials (as on the hosted demo). With your own sandbox app, create your own dispute:
@@ -237,7 +237,7 @@ Everything below was observed against the PayPal sandbox on 11 Nov 2026 unless m
   a case, and there was one demo case. They use the same error handling and audit trail.
 - **Sandbox case state changes on its own for a few minutes after an action** (for example
   `WAITING_FOR_SELLER_RESPONSE` to `UNDER_REVIEW` to `WAITING_FOR_BUYER_RESPONSE`), and the allowed actions
-  change with it. Press **Sync** to refresh.
+  change with it. Click **Refresh from PayPal** to update the case.
 - **Dispute webhooks did not arrive in our sandbox test.** The endpoint is deployed on Render and registered
   with PayPal for `CUSTOMER.DISPUTE.CREATED` and `CUSTOMER.DISPUTE.UPDATED`. We then opened a fresh
   item-not-received dispute as the sandbox buyer; PayPal's own webhook event log (`GET

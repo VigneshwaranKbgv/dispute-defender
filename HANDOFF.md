@@ -91,7 +91,7 @@ disk resets on every deploy or restart, so cases need re-adding.
 2. URL: `https://<service>.onrender.com/webhooks/paypal`.
 3. Events: **Customer dispute created**, **Customer dispute updated**, **Customer dispute resolved**.
 4. Copy the **Webhook ID** into Render's `PAYPAL_WEBHOOK_ID` (and into your local `.env` if you like). Render
-   redeploys. The header chip should then read "Webhooks on".
+   redeploys. The header then shows a "Webhook endpoint configured" badge (it is hidden when no webhook ID is set).
 
 ### 5. Test webhooks with a fresh dispute (10 min)
 
@@ -129,7 +129,7 @@ demo password if you set one. Same links at the bottom of `docs/DEVPOST_COPY.md`
 Follow `docs/VIDEO_SCRIPT.md` (shot list, exact clicks, voice-over, recording checklist). Upload to YouTube as
 **Public**.
 
-Tip: to get the **Add the demo case** and **Add sample evidence** buttons for your fresh dispute, set
+Tip: to get the **Add the demo case** and **Use sample evidence** buttons for your fresh dispute, set
 `DEMO_CASE_ID=<new case id>` in `.env` or on Render. The sample files mention the old transaction ID, and the
 AI will notice, so for the video it is better to upload two files edited to match the new order.
 
@@ -154,10 +154,10 @@ Paste from `docs/DEVPOST_COPY.md`. Add the repo URL, demo URL, video URL and a f
 
 ## If something goes wrong
 
-- **"The AI provider did not answer..." or a 503 message:** Gemini's free tier is busy. Click Analyze again.
+- **"The AI provider did not answer..." or a 503 message:** Gemini's free tier is busy. Click **Review this case** (or **Review again**) once more.
   To pin another model set `AI_MODEL` (for example `gemini-2.5-flash-lite`). Avoid `gemini-flash-latest`; it
   timed out in testing.
-- **PayPal refuses an action:** press **Sync**. The sandbox changes a case's state by itself for a few
+- **PayPal refuses an action:** click **Refresh from PayPal**. The sandbox changes a case's state by itself for a few
   minutes after it is opened or acted on. Use an action listed under "PayPal allows now".
 - **Demo case will not load on your own sandbox app:** it belongs to the original seller account. Create a new
   dispute (step 5).
