@@ -1,0 +1,27 @@
+TEST STORE - INVOICE
+====================
+
+Invoice number:       INV-2026-0042
+Invoice date:         2026-11-11
+Order reference:      TS-2026-1111-042
+Bill to:              John Doe
+Payment method:       PayPal (transaction 6K933125FW277434X)
+
+LINE ITEMS
+----------
+1 x Hackathon spike order (digital service)          USD 10.00
+                                             Total:  USD 10.00
+                                             Paid:   USD 10.00
+                                             Due:    USD  0.00
+
+DELIVERY TERMS
+--------------
+- Digital delivery only. No physical shipment.
+- A secure download link is emailed to the address on the PayPal payment
+  immediately after payment is received.
+- The link allows up to 5 downloads and stays active for 30 days.
+
+REFUND POLICY
+-------------
+- Full refund if the files cannot be delivered or are not as described,
+  when requested within 14 days of purchase.

@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+build/
+.next/
+__pycache__/
+.venv/
+*.log
+.DS_Store
+*.bak
+data/
+# superseded by scripts/ (kept locally only)
+spike/

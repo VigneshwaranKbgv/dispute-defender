@@ -1,0 +1,15 @@
+TEST STORE SUPPORT CHAT - TRANSCRIPT
+Conversation ID: CHAT-88213
+Order reference: TS-2026-1111-042 (PayPal transaction 6K933125FW277434X)
+Date: 2026-11-11 (all times UTC)
+
+[14:41:02] Test Store (Maya): Hi John, this is Maya from Test Store. I can see you reported that your order was not received. I'm sorry about that. I'd like to help straight away.
+[14:42:10] John Doe: Hi. I paid but I never got anything.
+[14:42:55] Test Store (Maya): Thanks. Our system sent the download link to your PayPal email at 14:28 UTC, about 30 seconds after your payment. Could you check your spam or promotions folder for an email from Test Store titled "Your order is ready"?
+[14:45:37] John Doe: Oh. Found it, it was in spam.
+[14:46:01] Test Store (Maya): Great. Does the link open for you?
+[14:47:44] John Doe: Yes, I just downloaded the zip. It's all there.
+[14:48:20] Test Store (Maya): Glad to hear it. Since you now have the files, would you be able to close the PayPal dispute from your side? You can do that in the PayPal Resolution Center.
+[14:49:03] John Doe: Sure, I'll do it later today.
+[14:49:15] Test Store (Maya): Thank you, John. If anything is missing from the files, reply here and I'll sort it out.
+[14:49:40] Chat ended by customer.
