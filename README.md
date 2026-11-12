@@ -7,8 +7,19 @@ case is, lists the proof that is missing, tracks the deadline and drafts a respo
 
 Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/). Sandbox only.
 
-- Live demo: _add the Render URL here after deploying_
-- Demo video: _add the YouTube URL here_
+- Live demo: <https://dispute-defender-mc23.onrender.com> (free Render plan: the first load can take about 30 seconds while it wakes up; password and sandbox login are in the Devpost testing notes)
+- Demo video (2:38, with subtitles): <https://youtu.be/2X6sVmQkVz4>
+- Devpost project: <https://devpost.com/software/dispute-defender-pjyv01>
+
+## How judges can test it
+
+1. Open the live demo and enter the demo password from the Devpost testing instructions.
+2. Click **Add a case**, enter the sandbox case ID **`PP-R-IFI-10200158`** (an item-not-received dispute for a USD 25.00 digital product), and click **Add case**.
+3. Open the case. Under **Your evidence**, add proof (type, note, optional file). Then click **Respond to dispute** and **Review this case** for the AI case review: strength score, missing proof, recommended step and a draft response.
+4. Click **Edit** to change the draft, then **Approve & send** and **Send to PayPal**. PayPal's real sandbox answer is shown. A seller response was already sent on this case, so PayPal may refuse a second send; the app then shows PayPal's exact error and a fallback. That is the intended honest-failure path.
+5. To see the webhook path: log in at <https://www.sandbox.paypal.com> with the sandbox buyer account from the Devpost testing instructions, pay an order, and use **Report a problem**. The new case appears in the app on its own, usually within a few minutes.
+
+Prefer to run it yourself? See [Run it locally](#run-it-locally).
 
 ---
 
@@ -178,14 +189,13 @@ Sandbox accounts must be **US** accounts. Other regions failed checkout in our t
 
 ### Sandbox test credentials for judges
 
-Sandbox only. These accounts hold no real money.
-
-| Account | Email | Password |
-| --- | --- | --- |
-| Sandbox buyer (personal, US) | _owner to fill in_ | _owner to fill in_ |
+Sandbox only. These accounts hold no real money. To keep logins out of a public repository, the sandbox buyer
+login and the demo password are given to judges in the **testing instructions of the Devpost submission**
+(<https://devpost.com/software/dispute-defender-pjyv01>).
 
 The hosted demo already has the sandbox seller credentials configured, so judges only need the buyer login to
-open a new dispute, and the demo password if one is set: _owner to fill in_.
+open a new dispute, and the demo password to open the app. To run the project yourself, create your own US
+sandbox accounts and app at <https://developer.paypal.com>.
 
 ## Deploy to Render
 
