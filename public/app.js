@@ -92,7 +92,7 @@ function Sidebar({ cases, selectedId, now, onSelect, onAdd, adding, config, load
       </form>
       <p class="muted small mt-8">
         You'll find the case ID in your PayPal Resolution Center.
-        ${config.webhookConfigured ? ' New cases can also arrive from PayPal automatically, but the sandbox may not send dispute events.' : ''}
+        ${config.webhookConfigured ? ' New cases can also arrive from PayPal automatically, though sandbox delivery can take a few minutes.' : ''}
       </p>
     </section>
 
@@ -701,7 +701,7 @@ function App() {
       <div class="topbar-inner">
         <a class="brand" href="#" onClick=${(e) => { e.preventDefault(); select(''); }}><${Icon.shield} /> Dispute Defender</a>
         <div class="grow"></div>
-        ${config.webhookConfigured ? html`<span class="pill hide-sm" title="A PayPal webhook ID is set, so incoming events can be verified. The sandbox may not send dispute events.">Webhook endpoint configured</span>` : null}
+        ${config.webhookConfigured ? html`<span class="pill hide-sm" title="A PayPal webhook ID is set, so incoming events can be verified. Sandbox delivery can take a few minutes.">Webhook endpoint configured</span>` : null}
         <span class="pill warn" title="All PayPal calls go to the sandbox. No real money moves.">Sandbox</span>
         <${LinkBtn} onClick=${openFeed}>Activity<//>
       </div>

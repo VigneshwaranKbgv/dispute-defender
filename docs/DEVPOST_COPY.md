@@ -76,7 +76,9 @@ person, accepted by PayPal (HTTP 200) and then visible on the PayPal case.
 
 - **The sandbox does not behave like the docs suggest.** Creating a dispute through the API was refused for
   our app, and the list-disputes endpoint returned nothing while a case existed. We redesigned intake around
-  dispute IDs and webhooks, and the buyer opens disputes in the sandbox Resolution Center.
+  dispute IDs and webhooks, and the buyer opens disputes in the sandbox Resolution Center. Webhooks do work in
+  the sandbox (verified end to end), but they arrive a few minutes late, so manual add-by-ID stays as a
+  fallback.
 - **Allowed actions depend on a state that moves by itself.** The same `send-message` call was refused with
   `ACTION_NOT_ALLOWED_IN_CURRENT_DISPUTE_STATE` in one state and accepted minutes later in another. We now read
   the allowed actions from PayPal's links, show them in the UI, and treat every refusal as a first-class,
@@ -109,7 +111,7 @@ person, accepted by PayPal (HTTP 200) and then visible on the PayPal case.
 
 - Verify file attachments on evidence submissions and the remaining actions (offer, escalate, accept) on
   fresh sandbox cases.
-- Confirm webhook delivery end to end and add deadline reminders by email. _(update after the webhook test)_
+- Add deadline reminders by email, and make webhook intake more robust to the sandbox's delayed delivery.
 - Evidence checklists per dispute reason, filled in automatically from shipping carriers and order systems.
 - A read-only "hold risk" view from PayPal Transaction Search to warn about patterns that tend to trigger
   reviews.

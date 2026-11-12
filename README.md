@@ -238,13 +238,14 @@ Everything below was observed against the PayPal sandbox on 11 Nov 2026 unless m
 - **Sandbox case state changes on its own for a few minutes after an action** (for example
   `WAITING_FOR_SELLER_RESPONSE` to `UNDER_REVIEW` to `WAITING_FOR_BUYER_RESPONSE`), and the allowed actions
   change with it. Click **Refresh from PayPal** to update the case.
-- **Dispute webhooks did not arrive in our sandbox test.** The endpoint is deployed on Render and registered
-  with PayPal for `CUSTOMER.DISPUTE.CREATED` and `CUSTOMER.DISPUTE.UPDATED`. We then opened a fresh
-  item-not-received dispute as the sandbox buyer; PayPal's own webhook event log (`GET
-  /v1/notifications/webhooks-events`) stayed empty and nothing reached the app, so PayPal did not generate or
-  send the events. Others have reported the same in the sandbox. The receiver, signature verification and
-  upsert are covered by unit tests with mocked HTTP but were **not observed end to end**. Cases are therefore
-  added by ID (the app then pulls everything from the PayPal Disputes API).
+- **Sandbox dispute webhooks work, but arrive late and unpredictably.** The endpoint is deployed on Render and
+  registered with PayPal for `CUSTOMER.DISPUTE.CREATED` and `CUSTOMER.DISPUTE.UPDATED`. In our test, a fresh
+  item-not-received dispute opened as the sandbox buyer was delivered to the app a few minutes later: the
+  Activity feed recorded `CUSTOMER.DISPUTE.CREATED received (verified)` and the case was added automatically.
+  Earlier checks that ran too soon saw nothing, and PayPal's event-log endpoint (`GET
+  /v1/notifications/webhooks-events`) did not reliably list the event we had already received, so do not
+  depend on it. Because delivery can lag, **Add a case** by ID and **Refresh from PayPal** remain available.
+  Render's free tier also wipes tracked cases on each restart or redeploy.
 - **Deadlines can be estimates.** When PayPal omits `seller_response_due_date`, the date shown is the opening
   date plus 20 days for inquiries, labelled "Estimate". No date is invented for other stages.
 - **AI limits.** Only the Gemini adapter has been run live. The `gemini-flash-latest` alias did not answer
